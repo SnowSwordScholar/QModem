@@ -12,8 +12,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build_arch: ['x64_ipk', 'x64_apk']
-    runs-on: ubuntu-latest
+        include:
+          # ubuntu-latest (26.04) ships uutils coreutils, whose `install
+          # --version` lacks "GNU" and fails the OpenWrt 23.05 prereq check.
+          - build_arch: x64_ipk
+            os: ubuntu-22.04
+          - build_arch: x64_apk
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - name: Install packages
