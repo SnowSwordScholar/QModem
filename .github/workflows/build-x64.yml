@@ -1,0 +1,167 @@
+name: "Build QModem x86_64 (manual)"
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  job_build_qmodem:
+    name: Build QModem x64
+    strategy:
+      fail-fast: false
+      matrix:
+        build_arch: ['x64_ipk', 'x64_apk']
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install packages
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install zstd build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-venv rsync unzip zlib1g-dev file wget
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: 'qmodem'
+
+      - name: Import Env
+        run: cat qmodem/.github/workflows/${{ matrix.build_arch }}.env >> "$GITHUB_ENV"
+
+      - name: Resolve snapshot SDK
+        id: resolve-sdk
+        if: env.SDK_PREFIX != ''
+        run: |
+          wget -q "${SDK_URL}sha256sums" -O sdk-sha256sums
+          line=$(awk -v prefix="*${SDK_PREFIX}" -v suffix=".${SDK_EXT}" '
+            index($2, prefix) == 1 && substr($2, length($2) - length(suffix) + 1) == suffix {
+              match_line=$0
+              count++
+            }
+            END {
+              if (count != 1) {
+                print "expected one matching SDK, found " count > "/dev/stderr"
+                exit 1
+              }
+              print match_line
+            }
+          ' sdk-sha256sums)
+          sdk_sha256=${line%% *}
+          sdk_file=${line#* \*}
+          sdk_name=${sdk_file%.${SDK_EXT}}
+          echo "Resolved snapshot SDK: ${sdk_file}"
+          echo "SDK_NAME=${sdk_name}" >> "$GITHUB_ENV"
+          echo "SDK_SHA256=${sdk_sha256}" >> "$GITHUB_ENV"
+          echo "sdk_name=${sdk_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache openwrt SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: openwrt-sdk-${{ matrix.build_arch }}-${{ env.SDK_NAME }}${{ steps.resolve-sdk.outputs.sdk_name }}
+
+      - name: Initialization environment
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        env:
+          url_sdk: ${{ env.SDK_URL }}${{ env.SDK_NAME}}.${{ env.SDK_EXT }}
+        run: |
+          file_name="${SDK_NAME}.${SDK_EXT}"
+          wget "${url_sdk}"
+          if [ -n "${SDK_SHA256:-}" ]; then
+            printf '%s  %s\n' "$SDK_SHA256" "$file_name" | sha256sum -c -
+          fi
+          if [ "${SDK_EXT}" == "tar.zst" ]; then
+            mkdir sdk && tar --zstd -xvf $file_name -C ./sdk --strip-components=1
+          elif [ "${SDK_EXT}" == "tar.xz" ]; then
+            mkdir sdk && tar -xvf $file_name -C ./sdk --strip-components=1
+          fi
+          cd sdk
+          if [ -n "${SDK_PREFIX:-}" ]; then
+            feed_ref=master
+            base_ref=main
+          else
+            feed_ref="openwrt-$(echo "$SDK_NAME" | sed -n 's/^openwrt-sdk-\([0-9]*\.[0-9]*\)\..*/\1/p')"
+            if [ -z "$feed_ref" ] || [ "$feed_ref" = "openwrt-" ]; then
+              echo "cannot derive the feed branch from SDK_NAME='$SDK_NAME'" >&2
+              exit 1
+            fi
+            base_ref="$feed_ref"
+          fi
+          echo "using feeds: base=$base_ref packages=$feed_ref luci=$feed_ref routing=$feed_ref"
+          echo "src-git base https://github.com/openwrt/openwrt.git;$base_ref" > feeds.conf
+          echo "src-git packages https://github.com/openwrt/packages.git;$feed_ref" >> feeds.conf
+          echo "src-git luci https://github.com/openwrt/luci.git;$feed_ref" >> feeds.conf
+          echo "src-git routing https://git.openwrt.org/feed/routing.git;$feed_ref"  >> feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          cd ..
+          echo "src-link qmodem $(pwd)/qmodem" >> sdk/feeds.conf
+          cd sdk
+          ./scripts/feeds update qmodem
+          ./scripts/feeds install -a -p qmodem
+          rm -rf feeds/base/package/kernel/gpio-button-hotplug
+          echo "CONFIG_ALL_NONSHARED=n" > .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_ALL=n" >> .config
+          echo "CONFIG_AUTOREMOVE=n" >> .config
+          echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
+          cat ../qmodem/.github/workflows/openwrt_package.config >> .config
+          make defconfig
+          make clean
+          sed -i '/^CONFIG_PACKAGE_gpio-button-hotplug=/d' .config
+          echo 'CONFIG_PACKAGE_gpio-button-hotplug=n' >> .config
+          sed -i '/^CONFIG_PACKAGE_libopenssl=/d;/^CONFIG_PACKAGE_openssl-util=/d' .config
+          echo 'CONFIG_PACKAGE_libopenssl=n' >> .config
+          echo 'CONFIG_PACKAGE_openssl-util=n' >> .config
+
+      - name: Compile QModem
+        id: compile
+        run: |
+          set -euo pipefail
+          cd sdk
+          ./scripts/feeds update qmodem
+          ./scripts/feeds install -a -p qmodem
+          rm -rf feeds/base/package/kernel/gpio-button-hotplug
+          generic_package=$(cat ../qmodem/.github/workflows/qmodem_package_generic)
+          arch_package=$(cat ../qmodem/.github/workflows/qmodem_package_arch)
+          compile_package() {
+            local package="$1"
+            if ! make "package/$package/compile" -j"$(nproc)"; then
+              echo "::group::Verbose build failure: $package"
+              make "package/$package/compile" -j1 V=s || true
+              echo "::endgroup::"
+              return 1
+            fi
+          }
+          for package in $generic_package; do
+            compile_package "$package"
+          done
+          for package in $arch_package; do
+            compile_package "$package"
+          done
+          package_dir="bin/packages/${{ env.SDK_ARCH }}/qmodem"
+          required_packages=(
+            qmodem qmodem-smsd sms-forwarder-next qmodem-uplink-manager luci-app-qmodem-uplink
+            luci-app-qmodem-next luci-i18n-qmodem-next-zh-cn
+          )
+          for package in "${required_packages[@]}"; do
+            compgen -G "$package_dir/${package}[-_]*" >/dev/null || {
+              echo "missing required release package: $package" >&2
+              exit 1
+            }
+          done
+          ls "$package_dir"
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "FIRMWARE=$(pwd)/$package_dir/" >> $GITHUB_ENV
+
+      - name: Upload QModem
+        if: ${{ steps.compile.outputs.status == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: QModem-${{ matrix.build_arch }}
+          path: ${{ env.FIRMWARE }}*
+          retention-days: 7
