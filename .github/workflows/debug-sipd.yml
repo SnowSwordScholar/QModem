@@ -37,4 +37,10 @@ jobs:
           sed -i 's#^include \.\./\.\./luci\.mk#include $(TOPDIR)/feeds/luci/luci.mk#' \
             "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile"
           cd sdk
+          ./scripts/feeds update qmodem
+          ./scripts/feeds install -a -p qmodem
+          echo "== installed? =="
+          ls -l package/feeds/qmodem/ | grep -i sipd || echo "still not installed"
           make package/luci-app-qmodem-sipd/compile -j1 V=s 2>&1 | tail -60
+          echo "== result =="
+          ls bin/packages/x86_64/qmodem/ | grep -i sipd || echo "no ipk"
