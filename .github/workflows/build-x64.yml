@@ -114,6 +114,12 @@ jobs:
           echo "CONFIG_AUTOREMOVE=n" >> .config
           echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
           cat ../qmodem/.github/workflows/openwrt_package.config >> .config
+          # Experimental voice stack must be selected in .config, otherwise
+          # `make package/<dir>/compile` is a silent no-op.
+          echo "CONFIG_PACKAGE_qmodem-voip=m" >> .config
+          echo "CONFIG_PACKAGE_luci-app-qmodem-voip=m" >> .config
+          echo "CONFIG_PACKAGE_qmodem-sipd=m" >> .config
+          echo "CONFIG_PACKAGE_luci-app-qmodem-sipd=m" >> .config
           make defconfig
           make clean
           sed -i '/^CONFIG_PACKAGE_gpio-button-hotplug=/d' .config
@@ -161,6 +167,8 @@ jobs:
             }
           done
           package_dir="bin/packages/${{ env.SDK_ARCH }}/qmodem"
+          echo "== built packages =="
+          ls "$package_dir"
           required_packages=(
             qmodem qmodem-smsd sms-forwarder-next qmodem-uplink-manager luci-app-qmodem-uplink
             luci-app-qmodem-next luci-i18n-qmodem-next-zh-cn qmodem-voip luci-app-qmodem-voip
