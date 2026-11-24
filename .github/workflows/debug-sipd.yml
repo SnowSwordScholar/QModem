@@ -16,8 +16,6 @@ jobs:
       - name: Import Env
         run: cat qmodem/.github/workflows/x64_ipk_2410.env >> "$GITHUB_ENV"
 
-      # Same key expression as build-x64.yml so the SDK prepared by the last
-      # successful build is reused instead of re-downloaded.
       - name: Restore SDK cache
         id: cache-sdk
         uses: actions/cache@v4
@@ -25,34 +23,18 @@ jobs:
           path: sdk
           key: openwrt-sdk-x64_ipk_2410-${{ env.SDK_NAME }}-${{ hashFiles('.github/workflows/build-x64.yml') }}
 
-      - name: Inspect include target
-        run: |
-          echo "== installed package dir =="
-          ls -l sdk/package/feeds/qmodem/ | grep -i sipd || true
-          echo "== what ../../luci.mk resolves to =="
-          for base in sdk/package/feeds/qmodem/luci-app-qmodem-sipd sdk/feeds/qmodem/luci/luci-app-qmodem-sipd; do
-            [ -e "$base" ] || continue
-            echo "$base -> $(cd "$base/../.." && pwd)/luci.mk : $([ -e "$base/../../luci.mk" ] && echo EXISTS || echo MISSING)"
-          done
-          echo "== repo root luci.mk =="
-          ls -l qmodem/luci.mk || echo "MISSING (repo root has no luci.mk)"
-          echo "== luci feed luci.mk (what siblings use) =="
-          ls -l sdk/feeds/luci/luci.mk || true
-
-      - name: Build as-is (expected to fail)
+      - name: Build as-is verbose
         continue-on-error: true
         run: |
           cd sdk
           ./scripts/feeds update qmodem
           ./scripts/feeds install -a -p qmodem
-          make package/luci-app-qmodem-sipd/compile -j1 2>&1 | tail -20
+          make package/luci-app-qmodem-sipd/compile -j1 V=s 2>&1 | tail -40
 
-      - name: Patch include path and rebuild
+      - name: Patch include path and rebuild verbose
+        continue-on-error: true
         run: |
           sed -i 's#^include \.\./\.\./luci\.mk#include $(TOPDIR)/feeds/luci/luci.mk#' \
             "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile"
-          grep -n 'luci.mk' "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile"
           cd sdk
-          make package/luci-app-qmodem-sipd/compile -j1 2>&1 | tail -15
-          echo "== result =="
-          ls bin/packages/x86_64/qmodem/ | grep -i sipd
+          make package/luci-app-qmodem-sipd/compile -j1 V=s 2>&1 | tail -60
