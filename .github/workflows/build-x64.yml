@@ -139,6 +139,22 @@ jobs:
           ./scripts/feeds update qmodem
           ./scripts/feeds install -a -p qmodem
           rm -rf feeds/base/package/kernel/gpio-button-hotplug
+          # Package selection must happen after the index is fresh: the SDK
+          # cache carries a .config from an older scan, and kconfig silently
+          # drops symbols it does not know yet, which turns the later
+          # `make package/<dir>/compile` into a no-op.
+          rm -f tmp/.config-package.in
+          select_package() {
+            local package="$1"
+            sed -i "/^CONFIG_PACKAGE_${package}=/d" .config
+            echo "CONFIG_PACKAGE_${package}=m" >> .config
+          }
+          for package in qmodem-voip luci-app-qmodem-voip qmodem-sipd luci-app-qmodem-sipd; do
+            select_package "$package"
+          done
+          make defconfig
+          echo "== verified selections =="
+          grep -E '^CONFIG_PACKAGE_(qmodem-voip|luci-app-qmodem-voip|qmodem-sipd|luci-app-qmodem-sipd)=' .config
           generic_package=$(cat ../qmodem/.github/workflows/qmodem_package_generic)
           arch_package=$(cat ../qmodem/.github/workflows/qmodem_package_arch)
           compile_package() {
