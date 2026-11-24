@@ -94,11 +94,12 @@ jobs:
             fi
             base_ref="$feed_ref"
           fi
-          echo "using feeds: base=$base_ref packages=$feed_ref luci=$feed_ref routing=$feed_ref"
+          echo "using feeds: base=$base_ref packages=$feed_ref luci=$feed_ref routing=$feed_ref telephony=$feed_ref"
           echo "src-git base https://github.com/openwrt/openwrt.git;$base_ref" > feeds.conf
           echo "src-git packages https://github.com/openwrt/packages.git;$feed_ref" >> feeds.conf
           echo "src-git luci https://github.com/openwrt/luci.git;$feed_ref" >> feeds.conf
           echo "src-git routing https://git.openwrt.org/feed/routing.git;$feed_ref"  >> feeds.conf
+          echo "src-git telephony https://git.openwrt.org/feed/telephony.git;$feed_ref" >> feeds.conf
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           cd ..
@@ -146,10 +147,23 @@ jobs:
           for package in $arch_package; do
             compile_package "$package"
           done
+          # Experimental voice stack: daemon + LuCI page must build; the SIP
+          # transport (needs telephony feed libs) is best effort so a pjsip
+          # build failure never blocks the rest of the artifact.
+          voice_package="voipd luci-app-qmodem-voip"
+          voice_optional="qmodem_sipd luci-app-qmodem-sipd"
+          for package in $voice_package; do
+            compile_package "$package"
+          done
+          for package in $voice_optional; do
+            make "package/$package/compile" -j"$(nproc)" || {
+              echo "::warning::optional voice package failed to build: $package"
+            }
+          done
           package_dir="bin/packages/${{ env.SDK_ARCH }}/qmodem"
           required_packages=(
             qmodem qmodem-smsd sms-forwarder-next qmodem-uplink-manager luci-app-qmodem-uplink
-            luci-app-qmodem-next luci-i18n-qmodem-next-zh-cn
+            luci-app-qmodem-next luci-i18n-qmodem-next-zh-cn qmodem-voip luci-app-qmodem-voip
           )
           for package in "${required_packages[@]}"; do
             compgen -G "$package_dir/${package}[-_]*" >/dev/null || {
