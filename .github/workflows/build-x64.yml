@@ -133,6 +133,9 @@ jobs:
         run: |
           set -euo pipefail
           cd sdk
+          # A Makefile that make cannot parse is silently dropped from the feed
+          # index; a cached index then hides the fix. Always rebuild it.
+          rm -rf feeds/qmodem.tmp feeds/qmodem.index feeds/qmodem.targetindex
           ./scripts/feeds update qmodem
           ./scripts/feeds install -a -p qmodem
           rm -rf feeds/base/package/kernel/gpio-button-hotplug
@@ -156,8 +159,8 @@ jobs:
           # Experimental voice stack: daemon + LuCI page must build; the SIP
           # transport (needs telephony feed libs) is best effort so a pjsip
           # build failure never blocks the rest of the artifact.
-          voice_package="voipd luci-app-qmodem-voip"
-          voice_optional="qmodem_sipd luci-app-qmodem-sipd"
+          voice_package="voipd luci-app-qmodem-voip luci-app-qmodem-sipd"
+          voice_optional="qmodem_sipd"
           for package in $voice_package; do
             compile_package "$package"
           done
@@ -172,6 +175,7 @@ jobs:
           required_packages=(
             qmodem qmodem-smsd sms-forwarder-next qmodem-uplink-manager luci-app-qmodem-uplink
             luci-app-qmodem-next luci-i18n-qmodem-next-zh-cn qmodem-voip luci-app-qmodem-voip
+            luci-app-qmodem-sipd
           )
           for package in "${required_packages[@]}"; do
             compgen -G "$package_dir/${package}[-_]*" >/dev/null || {
