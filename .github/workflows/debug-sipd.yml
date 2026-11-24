@@ -23,42 +23,45 @@ jobs:
           path: sdk
           key: openwrt-sdk-x64_ipk_2410-${{ env.SDK_NAME }}-${{ hashFiles('.github/workflows/build-x64.yml') }}
 
-      # Same shape as every other luci app in this repo: version.mk include
-      # plus explicit PKG_VERSION / PKG_RELEASE.
-      - name: Rewrite Makefile to standard shape
+      - name: Normalise Makefile
         run: |
           cat > "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile" <<'EOF'
-          include $(TOPDIR)/rules.mk
+include $(TOPDIR)/rules.mk
 
-          include ../../version.mk
+include ../../version.mk
 
-          LUCI_TITLE:=LuCI support for independent QModem SIP service
-          LUCI_DEPENDS:=+qmodem-sipd +luci-base
-          LUCI_PKGARCH:=all
-          PKG_VERSION:=$(QMODEM_VERSION)
-          PKG_RELEASE:=$(QMODEM_RELEASE)
-          PKG_LICENSE:=GPL-2.0-or-later
+LUCI_TITLE:=LuCI support for independent QModem SIP service
+LUCI_DEPENDS:=+qmodem-sipd +luci-base
+LUCI_PKGARCH:=all
+PKG_VERSION:=$(QMODEM_VERSION)
+PKG_RELEASE:=$(QMODEM_RELEASE)
+PKG_LICENSE:=GPL-2.0-or-later
 
-          include $(TOPDIR)/feeds/luci/luci.mk
-          EOF
-          sed -i 's/^          //' "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile"
-          echo "== new Makefile =="
-          cat "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile"
+include $(TOPDIR)/feeds/luci/luci.mk
+EOF
 
-      - name: Install from feed
+      - name: Compare index coverage
         continue-on-error: true
         run: |
           cd sdk
-          ./scripts/feeds update qmodem
-          echo "== index =="
-          grep -i sipd feeds/qmodem.index || echo "none in index"
-          ./scripts/feeds install -a -p qmodem 2>&1 | tail -5
-          ls -l package/feeds/qmodem/ | grep -i sipd || echo "not linked"
+          ./scripts/feeds update qmodem >/dev/null 2>&1 || true
+          echo "== total packages in index: $(grep -c '^Package:' feeds/qmodem.index)"
+          echo "== which luci apps made it =="
+          grep -A1 'Source-Makefile: feeds/qmodem/luci/' feeds/qmodem.index | grep '^Package:' || echo "NONE"
+          echo "== filesystem check =="
+          ls -ld feeds/qmodem/luci/luci-app-qmodem-sipd
+          ls -l feeds/qmodem/luci/luci-app-qmodem-sipd/Makefile
+          git -C "$GITHUB_WORKSPACE/qmodem" ls-files luci/luci-app-qmodem-sipd
 
-      - name: Build
+      - name: Force-install and build
         continue-on-error: true
         run: |
           cd sdk
-          make package/luci-app-qmodem-sipd/compile -j1 V=s 2>&1 | tail -30
+          ln -sfn ../../../feeds/qmodem/luci/luci-app-qmodem-sipd \
+            package/feeds/qmodem/luci-app-qmodem-sipd
+          ls -l package/feeds/qmodem/ | grep sipd
+          echo "CONFIG_PACKAGE_luci-app-qmodem-sipd=m" >> .config
+          yes "" | make oldconfig >/dev/null 2>&1 || true
+          make package/luci-app-qmodem-sipd/compile -j1 V=s 2>&1 | tail -35
           echo "== result =="
-          ls bin/packages/x86_64/qmodem/ | grep -i sipd || echo "no ipk"
+          ls -l bin/packages/x86_64/qmodem/ | grep -i sipd || echo "no ipk"
