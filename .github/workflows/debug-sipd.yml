@@ -23,24 +23,32 @@ jobs:
           path: sdk
           key: openwrt-sdk-x64_ipk_2410-${{ env.SDK_NAME }}-${{ hashFiles('.github/workflows/build-x64.yml') }}
 
-      - name: Build as-is verbose
-        continue-on-error: true
-        run: |
-          cd sdk
-          ./scripts/feeds update qmodem
-          ./scripts/feeds install -a -p qmodem
-          make package/luci-app-qmodem-sipd/compile -j1 V=s 2>&1 | tail -40
-
-      - name: Patch include path and rebuild verbose
-        continue-on-error: true
+      - name: Patch include path
         run: |
           sed -i 's#^include \.\./\.\./luci\.mk#include $(TOPDIR)/feeds/luci/luci.mk#' \
             "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile"
+          echo "== patched Makefile =="
+          cat "$GITHUB_WORKSPACE/qmodem/luci/luci-app-qmodem-sipd/Makefile"
+
+      - name: Diagnose index
+        continue-on-error: true
+        run: |
           cd sdk
           ./scripts/feeds update qmodem
-          ./scripts/feeds install -a -p qmodem
-          echo "== installed? =="
-          ls -l package/feeds/qmodem/ | grep -i sipd || echo "still not installed"
-          make package/luci-app-qmodem-sipd/compile -j1 V=s 2>&1 | tail -60
-          echo "== result =="
-          ls bin/packages/x86_64/qmodem/ | grep -i sipd || echo "no ipk"
+          echo "== index entries mentioning sipd =="
+          grep -i sipd feeds/qmodem.index || echo "none in index"
+          echo "== index entries mentioning voip (control: known good) =="
+          grep -i voip feeds/qmodem.index | head -5 || echo "none"
+          echo "== direct make evaluation of the patched package =="
+          make -s --no-print-directory -C feeds/qmodem/luci/luci-app-qmodem-sipd \
+            TOPDIR="$(pwd)" 2>&1 | head -15
+          echo "== direct make evaluation of the working neighbour =="
+          make -s --no-print-directory -C feeds/qmodem/luci/luci-app-qmodem-voip \
+            TOPDIR="$(pwd)" 2>&1 | head -15
+
+      - name: Explicit install attempt
+        continue-on-error: true
+        run: |
+          cd sdk
+          ./scripts/feeds install -p qmodem luci-app-qmodem-sipd 2>&1 | tail -10
+          ls -l package/feeds/qmodem/ | grep -i sipd || echo "not linked"
